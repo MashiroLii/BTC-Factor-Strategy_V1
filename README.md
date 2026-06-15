@@ -6,12 +6,12 @@ The objective is to evaluate whether selected momentum, volatility, volume, tech
 ## Project Structure
 
 .
-├── README.md
-├── data/: stores BTC price data and macroeconomic data
-├── notebooks/: contains step-by-step research notebooks
-├── src/: contains reusable Python functions
-├── outputs/: stores charts and backtesting results
-└── requirements.txt
+├── data/
+├── notebooks/
+├── src/
+├── outputs/
+├── requirements.txt
+└── README.md
 
 ## Planned Components
 

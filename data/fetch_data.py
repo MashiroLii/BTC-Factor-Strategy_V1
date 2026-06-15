@@ -1,83 +1,129 @@
 """
 fetch_data.py
 -------------
-Fetches historical BTC/EUR daily OHLCV data from Yahoo Finance
-and saves it as a CSV file in data/raw/.
+Fetches historical BTC/EUR price data and macro indicators
+from Yahoo Finance and alternative.me API.
 
-Source  : Yahoo Finance (via yfinance)
-Pair    : BTC-EUR
-Range   : 2018-01-01 → present
-Interval: daily
+Data sources:
+- BTC/EUR OHLCV : Yahoo Finance
+- VIX           : Yahoo Finance (^VIX)
+- US 10Y Yield  : Yahoo Finance (^TNX)
+- Fear & Greed  : alternative.me API
+
+No API key required.
 """
 
 import yfinance as yf
+import requests
 import pandas as pd
 import os
 
 
-# ── Constants ───────────────────────────────────────────────
-TICKER      = "BTC-EUR"
-START_DATE  = "2018-01-01"
-OUTPUT_PATH = "data/raw/btc_eur_daily.csv"
+# ── Constants ────────────────────────────────────────────────
+START_DATE = "2018-01-01"
 
 
 # ── Functions ────────────────────────────────────────────────
-def fetch_btc_eur(ticker: str, start: str) -> pd.DataFrame:
+def fetch_btc_eur(start: str = START_DATE) -> pd.DataFrame:
     """
     Download daily BTC/EUR OHLCV data from Yahoo Finance.
 
     Parameters
     ----------
-    ticker : Yahoo Finance ticker, e.g. 'BTC-EUR'
-    start  : Start date string, e.g. '2018-01-01'
+    start : Start date string, e.g. '2018-01-01'
 
     Returns
     -------
     DataFrame with columns: open, high, low, close, volume
-    Indexed by date (daily, UTC)
+    Indexed by date (daily)
     """
-    df = yf.download(ticker, start=start, interval="1d",
+    df = yf.download("BTC-EUR", start=start, interval="1d",
                      auto_adjust=True, progress=False)
-
-    # Flatten MultiIndex columns
-    df.columns = df.columns.get_level_values(0)
-
-    # Lowercase
+    df.columns    = df.columns.get_level_values(0)
     df.columns    = [c.lower() for c in df.columns]
     df.index.name = "date"
-
-    # Keep only OHLCV
     df = df[["open", "high", "low", "close", "volume"]]
-
-    # Drop today's incomplete candle
-    today = pd.Timestamp.now().normalize()
-    df    = df[df.index < today]
-
+    df = df[df.index < pd.Timestamp.now().normalize()]
     return df
 
 
-def save_raw(df: pd.DataFrame, path: str) -> None:
+def fetch_macro(start: str = START_DATE) -> pd.DataFrame:
     """
-    Save DataFrame to CSV.
+    Download daily macro data from Yahoo Finance.
+    Includes: VIX, US 10Y Treasury Yield.
 
     Parameters
     ----------
-    df   : DataFrame to save
-    path : Output file path
+    start : Start date string, e.g. '2018-01-01'
+
+    Returns
+    -------
+    DataFrame with columns: vix, us10y
+    Indexed by date (daily)
     """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    df.to_csv(path)
-    print(f"Saved {len(df)} rows → {path}")
+    tickers = {
+        "^VIX" : "vix",
+        "^TNX" : "us10y",
+    }
+
+    frames = []
+    for ticker, name in tickers.items():
+        df = yf.download(ticker, start=start, interval="1d",
+                         auto_adjust=True, progress=False)
+        df.columns    = df.columns.get_level_values(0)
+        df.index.name = "date"
+        df = df[["Close"]].rename(columns={"Close": name})
+        frames.append(df)
+
+    macro = frames[0].join(frames[1:], how="outer")
+    macro = macro[macro.index < pd.Timestamp.now().normalize()]
+    return macro
+
+
+def fetch_fear_greed(limit: int = 3000) -> pd.DataFrame:
+    """
+    Download Bitcoin Fear & Greed Index from alternative.me API.
+
+    Parameters
+    ----------
+    limit : Number of days to fetch (max 3000)
+
+    Returns
+    -------
+    DataFrame with column: fear_greed (0-100)
+    Indexed by date (daily)
+    """
+    resp = requests.get(
+        "https://api.alternative.me/fng/",
+        params={"limit": limit, "format": "json"},
+        timeout=10
+    )
+    resp.raise_for_status()
+
+    data = resp.json()["data"]
+    df   = pd.DataFrame(data)[["timestamp", "value"]]
+    df["date"] = pd.to_datetime(df["timestamp"].astype(int), unit="s")
+    df.set_index("date", inplace=True)
+    df = df[["value"]].rename(columns={"value": "fear_greed"})
+    df["fear_greed"] = pd.to_numeric(df["fear_greed"])
+    df = df.sort_index()
+    df = df[df.index < pd.Timestamp.now().normalize()]
+    return df
 
 
 # ── Main ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print(f"Fetching {TICKER} daily data from Yahoo Finance...")
+    print("Fetching BTC-EUR...")
+    btc = fetch_btc_eur()
+    print(f"  Rows: {len(btc)}, Range: {btc.index[0].date()} → {btc.index[-1].date()}")
 
-    df = fetch_btc_eur(TICKER, START_DATE)
+    print("Fetching macro data...")
+    macro = fetch_macro()
+    print(f"  Rows: {len(macro)}, Range: {macro.index[0].date()} → {macro.index[-1].date()}")
+    print(f"  Columns: {list(macro.columns)}")
 
-    print(f"Rows  : {len(df)}")
-    print(f"Range : {df.index[0].date()} → {df.index[-1].date()}")
-    print(df.tail(3))
+    print("Fetching Fear & Greed...")
+    fng = fetch_fear_greed()
+    print(f"  Rows: {len(fng)}, Range: {fng.index[0].date()} → {fng.index[-1].date()}")
 
-    save_raw(df, OUTPUT_PATH)
+    print("\nAll done!")

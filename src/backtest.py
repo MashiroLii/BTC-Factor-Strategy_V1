@@ -5,9 +5,10 @@ Event-driven backtest engine for BTC/EUR factor strategy.
 
 Entry/Exit logic
 ----------------
-BUY  : signal_score > buy_threshold  and no open position
+BUY  : signal_score > buy_threshold and no open position
+       and VIX < vix_threshold (extreme fear filter)
 SELL : signal_score < sell_threshold and open position
-STOP : price drops below entry - sl_mult * ATR
+STOP : price drops below stop loss (ATR-based or hard stop)
 TP   : price rises above entry + tp_mult * ATR
 Trailing stop: stop loss moves up as price increases
 
@@ -16,14 +17,26 @@ Position sizing
 Each trade uses position_pct of total portfolio value.
 Fixed fraction sizing - not all-in, not risk-based.
 
+Risk controls
+-------------
+Two stop loss mechanisms to handle BTC fat-tail distribution:
+1. ATR-based stop  : entry - sl_mult * ATR (adapts to volatility)
+2. Hard stop       : entry * (1 - hard_stop_pct) (absolute floor)
+The more conservative (higher) of the two is used.
+
+VIX filter: no new entries when VIX > vix_threshold.
+Extreme fear periods have unpredictable tail risks.
+
 Default parameters
 ------------------
 buy_threshold  =  0.3
 sell_threshold = -0.3
-sl_mult        =  2.0   (stop loss  = entry - 2x ATR)
-tp_mult        =  3.0   (take profit= entry + 3x ATR)
-position_pct   =  0.3   (30% of portfolio per trade)
+sl_mult        =  2.0
+tp_mult        =  3.0
+position_pct   =  0.3
 initial_capital= 10000.0
+hard_stop_pct  =  0.05   (max 5% loss per trade)
+vix_threshold  = 35.0    (no entry when VIX > 35)
 """
 
 import pandas as pd
@@ -36,19 +49,25 @@ def run_backtest(df: pd.DataFrame,
                  sl_mult:         float = 2.0,
                  tp_mult:         float = 3.0,
                  position_pct:    float = 0.3,
-                 initial_capital: float = 10000.0) -> tuple:
+                 initial_capital: float = 10000.0,
+                 hard_stop_pct:   float = 0.05,
+                 vix_threshold:   float = 35.0) -> tuple:
     """
-    Event-driven backtest engine.
+    Event-driven backtest engine with fat-tail risk controls.
 
     Parameters
     ----------
-    df              : DataFrame with signal_score and ATR columns
+    df              : DataFrame with signal_score, ATR, vix columns
     buy_threshold   : Score above this triggers BUY
     sell_threshold  : Score below this triggers SELL
-    sl_mult         : Stop loss  = entry - sl_mult * ATR
-    tp_mult         : Take profit= entry + tp_mult * ATR
-    position_pct    : Fraction of portfolio to invest per trade
+    sl_mult         : ATR-based stop loss multiplier
+    tp_mult         : ATR-based take profit multiplier
+    position_pct    : Fraction of portfolio per trade
     initial_capital : Starting capital in EUR
+    hard_stop_pct   : Hard stop loss as fraction of entry price
+                      e.g. 0.05 = stop out if price drops 5% from entry
+    vix_threshold   : No new entries when VIX exceeds this level
+                      Protects against extreme fear / tail risk periods
 
     Returns
     -------
@@ -65,13 +84,14 @@ def run_backtest(df: pd.DataFrame,
     trades    = []
     portfolio = []
 
-    df_bt = df.dropna(subset=["signal_score", "ATR"]).copy()
+    df_bt = df.dropna(subset=["signal_score", "ATR", "vix"]).copy()
 
     for i in range(len(df_bt)):
         row   = df_bt.iloc[i]
         price = row["close"]
         atr   = row["ATR"]
         score = row["signal_score"]
+        vix   = row["vix"]
         date  = df_bt.index[i]
 
         total_value = capital + position * price
@@ -112,7 +132,10 @@ def run_backtest(df: pd.DataFrame,
                 position = 0.0
 
         # ── Execute signals ───────────────────────────────────
-        if score > buy_threshold and position == 0 and cooldown == 0:
+        # VIX filter: block new entries during extreme fear
+        vix_ok = vix < vix_threshold
+
+        if score > buy_threshold and position == 0 and cooldown == 0 and vix_ok:
             invest   = total_value * position_pct
             invest   = min(invest, capital)
             btc_buy  = invest / price
@@ -120,7 +143,11 @@ def run_backtest(df: pd.DataFrame,
             position    = btc_buy
             entry_price = price
             capital    -= invest
-            stop_loss   = price - sl_mult * atr
+
+            # Use more conservative of ATR stop and hard stop
+            atr_stop    = price - sl_mult * atr
+            hard_stop   = price * (1 - hard_stop_pct)
+            stop_loss   = max(atr_stop, hard_stop)
             take_profit = price + tp_mult * atr
 
             trades.append({
@@ -131,7 +158,8 @@ def run_backtest(df: pd.DataFrame,
                 "cost"       : invest,
                 "sl"         : stop_loss,
                 "tp"         : take_profit,
-                "score"      : score
+                "score"      : score,
+                "vix"        : vix
             })
 
         elif score < sell_threshold and position > 0:
@@ -150,9 +178,9 @@ def run_backtest(df: pd.DataFrame,
 
         # ── Trailing stop ─────────────────────────────────────
         if position > 0 and price > entry_price:
-            new_sl = price - sl_mult * atr
-            if new_sl > stop_loss:
-                stop_loss = new_sl
+            atr_trail = price - sl_mult * atr
+            if atr_trail > stop_loss:
+                stop_loss = atr_trail
 
         portfolio.append(capital + position * price)
 

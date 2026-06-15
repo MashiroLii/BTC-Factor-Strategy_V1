@@ -1,4 +1,4 @@
-# BTC-Factor-Strategy_V1
+# BTC-Factor-Strategy_V1 (WIP)
 
 This project develops a factor-based Bitcoin trading strategy research framework using Python.
 The objective is to evaluate whether selected momentum, volatility, volume, technical, and macro factors have predictive power for future BTC returns.

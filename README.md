@@ -124,7 +124,7 @@ No API key required for any data source.
 - Factor selection uses overlapping data with the backtest period
   (minor look-ahead bias, documented in `02_Factor_Analysis.ipynb`)
 - Backtest covers only 2 years (730 days), limited statistical power
-- No transaction costs modelled (Revolut charges 0% crypto fees)
+- No transaction costs modelled
 - Past performance does not guarantee future results
 
 ---

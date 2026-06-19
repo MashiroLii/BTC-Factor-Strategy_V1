@@ -1,4 +1,4 @@
-# BTC-EUR Factor Strategy
+# BTC-EUR Macro Factor Strategy & Risk Framework
 
 A systematic macro factor research framework for Bitcoin (BTC/EUR),
 built from scratch using Python and public data sources.
